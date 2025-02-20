@@ -1,0 +1,16 @@
+{
+  "token": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "default_character_name": "ずんだもん",
+  "character_name": {
+      "四国めたん": 2,
+      "ずんだもん": 3,
+      "春日部つむぎ": 8,
+      "雨晴はう": 10,
+      "波音リツ": 9,
+      "玄野武宏": 11,
+      "白上虎太郎": 12,
+      "青山龍星": 13,
+      "冥鳴ひまり": 14,
+      "九州そら": 16
+  }
+}
