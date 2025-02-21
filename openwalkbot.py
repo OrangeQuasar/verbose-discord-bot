@@ -19,6 +19,8 @@ CHARACTER_MAP = config["character_map"]
 SAVE_DIR = config["mp3_directory"]
 OUTPUT_CHANNELID = config["recording_output_cnannelID"]
 
+FFMPEG_PATH = "ffmpeg.exe"
+
 #ユーザーごとのキャラクター設定(なにこれ?)
 user_character_map = {}
 server_dictionaries = {}
@@ -61,6 +63,38 @@ def apply_custom_dictionary(guild_id, text):
         pronunciation = entry["pronunciation"]
         text = text.replace(surface, pronunciation)
     return text
+
+#録音データを保存する辞書(なにこれ?)
+user_audio = {}
+recording = False
+
+class AudioRecorder(discord.VoiceClient):
+    def __init__(self, client, channel):
+        super().__init__(client, channel)
+        self.buffer = {}
+        self.recording = False
+
+    async def on_voice_packet(self, packet):
+        if not self.recording or packet.user is None:
+            return
+        user = packet.user
+        display_name = user.display_name
+        if display_name not in self.buffer:
+            self.buffer[display_name] = []
+        self.buffer[display_name].append(np.frombuffer(packet.data, dtype=np.int16))
+
+    def write_audio_files(self):
+        if not os.path.exists(SAVE_DIR):
+            os.makedirs(SAVE_DIR)
+        for display_name, data in self.buffer.items():
+            audio_data = np.concatenate(data, axis=0)
+            file_path = os.path.join(SAVE_DIR, f"{display_name}.wav")
+            audio = AudioSegment(audio_data.tobytes(), frame_rate=48000, sample_width=2, channels=1)
+            audio.export(file_path, format="wav")
+            mp3_path = file_path.replace(".wav", ".mp3")
+            audio.export(mp3_path, format="mp3")
+            os.remove(file_path)
+            user_audio[display_name] = mp3_path
 
 #botログイン
 @bot.event
@@ -126,6 +160,7 @@ async def add(ctx, surface: str, pronunciation: str):
         server_dictionaries[guild_id] = []
 
     entry = {
+        "serverID": guild_id,
         "surface": surface,
         "pronunciation": pronunciation
     }
@@ -157,14 +192,14 @@ async def rec(ctx):
 
 #録音を終了
 @bot.command()
-async def rstop(ctx):
+async def recstop(ctx):
     if ctx.voice_client and isinstance(ctx.voice_client, AudioRecorder):
         ctx.voice_client.recording = False
         ctx.voice_client.write_audio_files()
         await ctx.send("録音を停止し、ファイルを保存しました！")
     else:
         await ctx.send("録音を開始していません！")
-
+        
 #録音データ出力
 @bot.command()
 async def send_audio(ctx, display_name: str, mode: str = "divided"):
@@ -340,35 +375,5 @@ async def play_audio_from_url(voice_client, url):
             await active_text_channel.send(error_message)
         if voice_client:
             await generate_and_play_tts(voice_client, "ズモモエラー！！音声ファイル再生のエラーが出たぞ！人間！対応しろ！", CHARACTER_MAP[DEFAULT_CHARACTER])
-
-#録音データを保存する辞書(なにこれ?)
-user_audio = {}
-recording = False
-
-class AudioRecorder(discord.VoiceClient):
-    def __init__(self, client, channel):
-        super().__init__(client, channel)
-        self.buffer = {}
-        self.recording = False
-
-    async def recv_audio(self, user, data):
-        if self.recording:
-            display_name = user.display_name
-            if display_name not in self.buffer:
-                self.buffer[display_name] = []
-            self.buffer[display_name].append(np.frombuffer(data, dtype=np.int16))
-
-    def write_audio_files(self):
-        if not os.path.exists(SAVE_DIR):
-            os.makedirs(SAVE_DIR)
-        for display_name, data in self.buffer.items():
-            audio_data = np.concatenate(data, axis=0)
-            file_path = os.path.join(SAVE_DIR, f"{display_name}.wav")
-            audio = AudioSegment(audio_data.tobytes(), frame_rate=48000, sample_width=2, channels=1)
-            audio.export(file_path, format="wav")
-            mp3_path = file_path.replace(".wav", ".mp3")
-            audio.export(mp3_path, format="mp3")
-            os.remove(file_path)
-            user_audio[display_name] = mp3_path
 
 bot.run(TOKEN)
