@@ -1,5 +1,7 @@
 {
   "token": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "mp3_directory": "recordings",
+  "recording_output_cnannelID": "0000000000000000000",
   "default_character_name": "ずんだもん",
   "character_name": {
       "四国めたん": 2,
