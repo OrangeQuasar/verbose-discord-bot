@@ -8,6 +8,7 @@ import urllib.parse
 from pydub import AudioSegment
 import os
 import wave
+import time
 
 # 設定ファイルを読み込み
 with open("config.json", "r", encoding="utf-8") as f1:
@@ -191,11 +192,19 @@ async def audioplay(ctx, state: str):
 # 録音を開始
 @bot.command()
 async def rec(ctx):
+    for file in os.listdir(SAVE_DIR):
+        file_path = os.path.join(SAVE_DIR, file)
+        os.remove(file_path)
+        user_audio.clear()
     if ctx.voice_client:
+        # 録音開始時間を保存
+        with open(os.path.join(SAVE_DIR, "start_time.txt"), "w") as f:
+            f.write(str(int(time.time())))
+
         ctx.voice_client.start_recording(
             discord.sinks.MP3Sink(), finished_callback, ctx
         )
-        await ctx.send("録音を開始しました！")
+        await ctx.send("録音を開始しました。")
     else:
         await ctx.send("ボイスチャンネルに接続していません！")
 
@@ -203,8 +212,12 @@ async def rec(ctx):
 # 録音を終了
 @bot.command()
 async def rstop(ctx):
+    # 録音終了時間を保存
+    with open(os.path.join(SAVE_DIR, "end_time.txt"), "w") as f:
+        f.write(str(int(time.time())))
+
     ctx.voice_client.stop_recording()
-    await ctx.send("録音終了!")
+    await ctx.send("録音を終了しました。音声を合成中...")
 
 
 async def finished_callback(
@@ -218,6 +231,42 @@ async def finished_callback(
         song = AudioSegment.from_file(audio.file, format="mp3")
         song.export(f"./recordings/{safe_name}.mp3", format="mp3")
 
+        # 録音終了後、無音音声とオーバーレイ
+    start_time_path = os.path.join(SAVE_DIR, "start_time.txt")
+    end_time_path = os.path.join(SAVE_DIR, "end_time.txt")
+
+    if os.path.exists(start_time_path) and os.path.exists(end_time_path):
+        with open(start_time_path, "r") as f:
+            start_time = int(f.read().strip())
+        with open(end_time_path, "r") as f:
+            end_time = int(f.read().strip())
+
+        duration_ms = end_time - start_time
+
+        def add_silence_to_mp3(SAVE_DIR, duration_ms):
+
+            for filename in os.listdir(SAVE_DIR):
+                if filename.lower().endswith(".mp3"):
+                    filepath = os.path.join(SAVE_DIR, filename)
+                    audio = AudioSegment.from_mp3(filepath)
+                    audio_length = len(audio) / 1000  # ミリ秒を秒に変換
+
+                    if audio_length < duration_ms:
+                        silence_duration = int(
+                            (duration_ms - audio_length) * 1000 + 3000
+                        )  # 秒をミリ秒に変換
+                        silence = AudioSegment.silent(duration=silence_duration)
+                        new_audio = silence + audio
+
+                        new_audio.export(filepath, format="mp3")
+                        print(f"無音を追加: {filename}")
+                    else:
+                        print(f"変更不要: {filename} ({audio_length}秒)")
+
+        add_silence_to_mp3(SAVE_DIR, duration_ms)
+
+    await ctx.send("録音データの合成完了！`!output`を実行してください。")
+
 
 # 録音データ出力
 @bot.command()
@@ -229,58 +278,44 @@ async def output(ctx, display_name: str, channel_id: int = None):
         )
         return
 
-    recordings_dir = "./recordings"
-
     if display_name.lower() == "merge":
-        files = [f for f in os.listdir(recordings_dir) if f.endswith(".mp3")]
-        combined = sum(
-            (
-                AudioSegment.from_file(os.path.join(recordings_dir, file))
-                for file in files
-            ),
-            AudioSegment.empty(),
-        )
-        merged_file_path = os.path.join(recordings_dir, "merged.mp3")
-        combined.export(merged_file_path, format="mp3")
-        await channel.send(file=discord.File(merged_file_path))
+        # ディレクトリ内のMP3ファイルを取得（merged.mp3 は除外）
+        mp3_files = [
+            f for f in os.listdir(SAVE_DIR) if f.endswith(".mp3") and f != "merged.mp3"
+        ]
+
+        if not mp3_files:
+            print("MP3ファイルが見つかりません。")
+            return
+
+        # 最初のMP3をベースとしてロード
+        base = AudioSegment.silent(duration=0)  # 初期状態は無音
+        for mp3 in mp3_files:
+            audio = AudioSegment.from_file(os.path.join(SAVE_DIR, mp3))
+            if len(base) < len(audio):
+                base = base + AudioSegment.silent(
+                    duration=len(audio) - len(base)
+                )  # 長さを調整
+            else:
+                audio = audio + AudioSegment.silent(duration=len(base) - len(audio))
+
+            base = base.overlay(audio)  # オーバーレイ
+
+        # 保存
+        output_path = os.path.join(SAVE_DIR, "merged.mp3")
+        base.export(output_path, format="mp3")
+        print(f"オーバーレイしたMP3を {output_path} に保存しました。")
+        await channel.send(file=discord.File(os.path.join(SAVE_DIR, "merged.mp3")))
     elif display_name.lower() == "all":
-        files = [f for f in os.listdir(recordings_dir) if f.endswith(".mp3")]
+        files = [f for f in os.listdir(SAVE_DIR) if f.endswith(".mp3")]
         for file in files:
-            await channel.send(file=discord.File(os.path.join(recordings_dir, file)))
+            await channel.send(file=discord.File(os.path.join(SAVE_DIR, file)))
     else:
-        file_path = os.path.join(recordings_dir, f"{display_name}.mp3")
+        file_path = os.path.join(SAVE_DIR, f"{display_name}.mp3")
         if os.path.exists(file_path):
             await channel.send(file=discord.File(file_path))
         else:
             await ctx.send(f"{display_name}.mp3 が見つかりません。")
-
-
-"""
-# 録音データ削除
-@bot.command()
-async def recdelete(ctx):
-    await ctx.send("本当にすべての録音データを削除しますか？ `y/n`")
-
-    def check(m):
-        return (
-            m.author == ctx.author
-            and m.channel == ctx.channel
-            and m.content.lower() in ["y", "n"]
-        )
-
-    try:
-        msg = await bot.wait_for("message", check=check, timeout=30)
-        if msg.content.lower() == "y":
-            for file in os.listdir(SAVE_DIR):
-                file_path = os.path.join(SAVE_DIR, file)
-                os.remove(file_path)
-            user_audio.clear()
-            await ctx.send("すべての録音データを削除しました。")
-        else:
-            await ctx.send("録音データの削除をキャンセルしました。")
-    except asyncio.TimeoutError:
-        await ctx.send("タイムアウトしました。録音データの削除をキャンセルします。")
-"""
 
 
 # コマンドの使用方法を表示
