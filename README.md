@@ -1,39 +1,41 @@
 # verbose-discord-bot
  this bot provides various functions regarding voice channels
 
-Currently I am preparing English README.md
+日本語版のREADME.mdは現在準備中です。
 ==========================================
 
-現在辞書登録機能が一部の状況で正常に機能しない不具合、`!output merge`で正常に合成が行われない不具合を確認しています。早急に修正を行う予定です。
-===================================================================
+We are currently confirming an issue where the following functions are not working properly. We plan to fix this issue as soon as possible.
+===========================================================================================================================================
+* Contents registered in the dictionary are not saved.
+* `!output merge` causes discrepancies in each user's audio
+* When mentioning a user or channel, their ID will be read out loud.
 
-ボイスチャンネルでの機能
-============
+Functions in voice channel
+==========================
 
-※これらは開発段階におけるものであり、変更される可能性があります。また作者のやる気が続く限り今後も新機能が追加されていく予定です。
------------------------------------------------------------------
+*These are in the development stage and are subject to change. New features will continue to be added in the future as long as the author remains motivated.
+-------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-原則以下の機能は`!join`コマンドが送信されたテキストチャンネル下て動作します。
+* Read out the sent message with VOICEVOX (VOICEVOX server, dictionary registration, character change & addition possible)
+* Identifies attached files by image, video, document, audio, etc. and reads "XX file attached". For audio files, there is a function to play them during a call (can be changed in settings)
+* Record calls and output in mp3 format to specified text channel (output per user / recordings of all users can be combined into one)
+* Reminder function that allows you to specify date and time, interval, and target users
 
-*   送信されたメッセージをVOICEVOXで読み上げる(辞書登録・キャラクター変更・追加可能)
-*   添付されたファイルを画像、動画、ドキュメント、音声、その他で判別し、「〇〇ファイル添付」と読み上げる。音声ファイルの場合は通話内で再生する機能あり(設定で変更可)。
-*   【新機能】通話を録音し、指定したテキストチャンネルにmp3形式で出力(ユーザーごとの出力・全ユーザーの録音を1つに結合可)。
+List of available commands
+==========================
 
-使用可能なコマンド一覧
-===========
+*These are in the development stage and are subject to change.
+--------------------------------------------------------------
 
-※これらは開発段階におけるものであり、変更される可能性があります。
----------------------------------
-
-原則以下の機能は`!join`コマンドが送信されたテキストチャンネル下て動作します。
-
-*   `!join`: ボイスチャンネルに接続
-*   `!leave`: ボイスチャンネルから切断
-*   `!vstop`: 再生中の音声を停止
-*   `!set <キャラクター名>`: 実行者のメッセージを読み上げるキャラクターを設定
-*   `!add <単語> <読み>`: サーバー固有の辞書に単語を登録
-*   `!audioplay `: 添付された音声ファイルの再生設定を変更(true: 再生する、false: 再生しない)
-*   `!rec`: ボイスチャンネルの録音を開始
-*   `!rstop`: ボイスチャンネルの録音を停止
-*   `!output <<ユーザー表示名>|all|merge>`: 録音した音声を出力(ユーザー表示名: 特定のユーザーの録音音声を出力、all: 全ユーザーの録音音声を出力、merge: 全ユーザーの録音音声を1つにまとめて出力)
-*   `!help`: このヘルプを表示
+* `!join`: join a voice channel
+* `!leave`: disconnect from a voice channel
+* `!vstop`: stop audio currently playing
+* `!set <character name>`: set the character who will read the executor's message
+* `!add <word> <reading>`: register a word to the server-specific dictionary
+* `!audioplay `: change the playback settings for attached audio files (true: play, false: don't play)
+* `!rec`: start recording a voice channel
+* `!recstop`: stop recording a voice channel
+* `!output <<user display name>|all|merge>`: output recorded audio (user display name: output a specific user's recorded audio, all: output all users' recorded audio, merge: output all users' recorded audio combined into one)
+* `!reminder yyyy-mm-dd-hh-mm <interval (min)> <user name>`: Reminder at a specified time
+* `!remstop`: Cancel reminder
+* `!help`: Show this help

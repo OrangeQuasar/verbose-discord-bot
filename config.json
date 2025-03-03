@@ -1,8 +1,9 @@
 {
   "token": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-  "mp3_directory": "recordings",
+  "rec_directory": "recordings",
   "recording_output_cnannelID": 1234567890123456789,
-  "default_character": "ずんだもん",
+  "default_character_name": "ずんだもん",
+  "voicevox_url": "http://127.0.0.1:50021",
   "character_map": {
       "四国めたん": 2,
       "ずんだもん": 3,

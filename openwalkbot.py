@@ -1,5 +1,5 @@
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 import requests
 import asyncio
 from io import BytesIO
@@ -7,18 +7,19 @@ import json
 import urllib.parse
 from pydub import AudioSegment
 import os
-import wave
 import time
+from datetime import datetime
 
 # 設定ファイルを読み込み
 with open("config.json", "r", encoding="utf-8") as f1:
     config = json.load(f1)
 
 TOKEN = config["token"]
-DEFAULT_CHARACTER = config["default_character"]
+DEFAULT_CHARACTER = config["default_character_name"]
 CHARACTER_MAP = config["character_map"]
-SAVE_DIR = config["mp3_directory"]
+SAVE_DIR = config["rec_directory"]
 OUTPUT_CHANNELID = config["recording_output_cnannelID"]
+VOICEVOX_URL = config["voicevox_url"]
 
 # ユーザーごとのキャラクター設定(なにこれ?)
 user_character_map = {}
@@ -31,6 +32,7 @@ is_audio_playing = False
 
 # Botの準備(なにこれ?)
 intents = discord.Intents.default()
+intents.members = True
 intents.messages = True
 intents.message_content = True
 intents.guilds = True
@@ -38,8 +40,8 @@ intents.voice_states = True
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
-# 録音データを保存する辞書
-user_audio = {}
+user_audio = {}  # 録音データを保存する辞書
+reminders = []  # リマインダーのリスト
 
 
 class AudioRecorder(discord.VoiceClient):
@@ -47,25 +49,6 @@ class AudioRecorder(discord.VoiceClient):
         display_name = user.display_name
         if display_name not in self.buffer:
             self.buffer[display_name] = []
-
-
-def write_audio_files(self):
-    if not os.path.exists(SAVE_DIR):
-        os.makedirs(SAVE_DIR)
-    for display_name, data in self.buffer.items():
-        if not data:
-            continue
-        file_path = os.path.join(SAVE_DIR, f"{display_name}.wav")
-        with wave.open(file_path, "wb") as wf:
-            wf.setnchannels(2)
-            wf.setsampwidth(2)
-            wf.setframerate(48000)
-            wf.writeframes(b"".join(data))
-        mp3_path = file_path.replace(".wav", ".mp3")
-        audio = AudioSegment.from_wav(file_path)
-        audio.export(mp3_path, format="mp3")
-        os.remove(file_path)
-        user_audio[display_name] = mp3_path
 
 
 # ファイル拡張子判別
@@ -95,10 +78,14 @@ def apply_custom_dictionary(guild_id, text):
     return text
 
 
-# botログイン
+# botログイン&ステータス
 @bot.event
 async def on_ready():
     print(f"Botとしてログインしました: {bot.user}")
+    activity = discord.Activity(type=discord.ActivityType.streaming, name="絶賛(?)稼働中! | !help ")
+    # activity = discord.Activity(status=discord.Status.dnd, type=discord.ActivityType.streaming, name="メンテナンス中")
+    await bot.change_presence(activity=activity)
+    check_reminders.start()
 
 
 # ボイスチャンネル接続
@@ -142,7 +129,7 @@ async def vstop(ctx):
         ctx.voice_client.stop()
         global is_audio_playing
         is_audio_playing = False
-        await ctx.send("再生を停止しました！")
+        await ctx.send("再生を停止しました。")
     else:
         await ctx.send("再生中の音声がありません。")
 
@@ -159,7 +146,7 @@ async def set(ctx, character_name: str):
         return
 
     user_character_map[ctx.author.id] = CHARACTER_MAP[character_name]
-    await ctx.send(f"キャラクターを '{character_name}' に設定しました！")
+    await ctx.send(f"キャラクターを '{character_name}' に設定しました。")
 
 
 # 辞書登録機能
@@ -186,7 +173,7 @@ async def audioplay(ctx, state: str):
 
     server_audio_playback_settings[guild_id] = state.lower() == "true"
     status = "有効" if server_audio_playback_settings[guild_id] else "無効"
-    await ctx.send(f"音声ファイルの再生設定を{status}にしました！")
+    await ctx.send(f"音声ファイルの再生設定を{status}にしました。")
 
 
 # 録音を開始
@@ -206,12 +193,12 @@ async def rec(ctx):
         )
         await ctx.send("録音を開始しました。")
     else:
-        await ctx.send("ボイスチャンネルに接続していません！")
+        await ctx.send("ボイスチャンネルに接続してからコマンドを実行してください！")
 
 
 # 録音を終了
 @bot.command()
-async def rstop(ctx):
+async def recstop(ctx):
     # 録音終了時間を保存
     with open(os.path.join(SAVE_DIR, "end_time.txt"), "w") as f:
         f.write(str(int(time.time())))
@@ -220,6 +207,7 @@ async def rstop(ctx):
     await ctx.send("録音を終了しました。音声を合成中...")
 
 
+# 録音音声の合成
 async def finished_callback(
     sink: discord.sinks.MP3Sink, ctx: discord.ApplicationContext
 ):
@@ -249,12 +237,12 @@ async def finished_callback(
                 if filename.lower().endswith(".mp3"):
                     filepath = os.path.join(SAVE_DIR, filename)
                     audio = AudioSegment.from_mp3(filepath)
-                    audio_length = len(audio) / 1000  # ミリ秒を秒に変換
+                    audio_length = len(audio) / 1000
 
                     if audio_length < duration_ms:
                         silence_duration = int(
-                            (duration_ms - audio_length) * 1000 + 3000
-                        )  # 秒をミリ秒に変換
+                            (duration_ms - audio_length) * 1000 + 2000
+                        )
                         silence = AudioSegment.silent(duration=silence_duration)
                         new_audio = silence + audio
 
@@ -318,6 +306,36 @@ async def output(ctx, display_name: str, channel_id: int = None):
             await ctx.send(f"{display_name}.mp3 が見つかりません。")
 
 
+# リマインダー設定
+@bot.command()
+async def reminder(
+    ctx, datetime_str: str, interval: int, *users: commands.Greedy[discord.Member]
+):
+    try:
+        global user_ids,rem_channel
+        rem_channel = ctx
+        remind_time = datetime.strptime(datetime_str, "%Y-%m-%d-%H-%M")
+        rem_unix_time = int(time.mktime(remind_time.timetuple()))
+        user_ids = [user.id for user in users]  # ユーザーIDを取得
+        member_mentions = [f"<@{uid}>" for uid in user_ids]  # メンション形式に変換
+        reminders.append((rem_unix_time, ctx.channel.id, interval, users))
+        await rem_channel.send(
+            f'リマインダーを設定しました。 <t:{int(rem_unix_time)}:F> に {" ".join(member_mentions)} に通知します。'
+        )
+    except ValueError:
+        await rem_channel.send(
+            "日付フォーマットが間違っています。 yyyy-mm-dd-hh-mm で入力してください。"
+        )
+
+
+# リマインダー解除
+@bot.command()
+async def remstop(ctx):
+    global reminders
+    reminders = []
+    await ctx.send("すべてのリマインダーを解除しました。")
+
+
 # コマンドの使用方法を表示
 @bot.command()
 async def help(ctx):
@@ -339,12 +357,16 @@ async def help(ctx):
 
     `!rec`: ボイスチャンネルの録音を開始
 
-    `!rstop`: ボイスチャンネルの録音を停止
+    `!recstop`: ボイスチャンネルの録音を停止
 
     `!output <<ユーザー表示名>|all|merge>`: 録音した音声を出力
         ユーザー表示名: 特定のユーザーの録音音声を出力
         all: 全ユーザーの録音音声を出力
         merge: 全ユーザーの録音音声を1つにまとめて出力
+
+    `!reminder yyyy-mm-dd-hh-mm <インターバル(分)> <ユーザー名>`: 指定した時間にリマインダー
+
+    `!remstop`: リマインダーを解除 
 
     `!help`: このヘルプを表示
     """
@@ -368,6 +390,17 @@ async def on_message(message):
     if message.content.startswith(bot.command_prefix):
         return
 
+    """
+    # ユーザーメンションを名前に置換
+    for user in message.mentions:
+        message = message.replace(f"<@{user.id}>", f"@{user.display_name}")
+        # message = [Item.replace(f"<@{user.id}>", f"@{user.display_name}") for Item in message]
+
+    # チャンネルメンションを名前に置換
+    for channel in message.channel_mentions:
+        message = message.replace(f"<#{channel.id}>", f"#{channel.name}")
+        # message = [Item.replace(f"<#{channel.id}>", f"#{channel.name}") for Item in message]
+    """
     if message.guild.voice_client and message.guild.voice_client.is_connected():
         character_id = user_character_map.get(
             message.author.id, CHARACTER_MAP[DEFAULT_CHARACTER]
@@ -412,13 +445,13 @@ async def generate_and_play_tts(voice_client, text, character_id):
     try:
         is_audio_playing = False
         encoded_text = urllib.parse.quote(text)
-        query_url = f"http://localhost:50021/audio_query?text={encoded_text}&speaker={character_id}"
+        query_url = f"{VOICEVOX_URL}/audio_query?text={encoded_text}&speaker={character_id}"
         query_response = requests.post(query_url)
         query_response.raise_for_status()
         audio_query = query_response.json()
 
         synthesis_response = requests.post(
-            f"http://localhost:50021/synthesis",
+            f"{VOICEVOX_URL}/synthesis",
             params={"speaker": character_id},
             json=audio_query,
         )
@@ -429,8 +462,7 @@ async def generate_and_play_tts(voice_client, text, character_id):
         if not is_audio_playing or not voice_client.is_playing():
             is_audio_playing = True
             voice_client.play(
-                discord.FFmpegPCMAudio(audio_data, pipe=True, executable="ffmpeg.exe"),
-                after=lambda e: print(f"再生終了: {e}"),
+                discord.FFmpegPCMAudio(audio_data, pipe=True),
             )
             while voice_client.is_playing():
                 await asyncio.sleep(1)
@@ -441,13 +473,7 @@ async def generate_and_play_tts(voice_client, text, character_id):
         )
         print(error_message)
         if active_text_channel:
-            await active_text_channel.send(error_message)
-        if voice_client:
-            await generate_and_play_tts(
-                voice_client,
-                "ズモモエラー！！TTS生成のエラーが出たぞ！人間！対応しろ！",
-                CHARACTER_MAP[DEFAULT_CHARACTER],
-            )
+            await active_text_channel.send(error_message)   
 
 
 # 添付された音声をURLから再生
@@ -462,8 +488,7 @@ async def play_audio_from_url(voice_client, url):
         if not is_audio_playing:
             is_audio_playing = True
             voice_client.play(
-                discord.FFmpegPCMAudio(audio_data, pipe=True, executable="ffmpeg.exe"),
-                after=lambda e: print(f"再生終了: {e}"),
+                discord.FFmpegPCMAudio(audio_data, pipe=True),
             )
             while voice_client.is_playing():
                 await asyncio.sleep(1)
@@ -475,12 +500,20 @@ async def play_audio_from_url(voice_client, url):
         print(error_message)
         if active_text_channel:
             await active_text_channel.send(error_message)
-        if voice_client:
-            await generate_and_play_tts(
-                voice_client,
-                "ズモモエラー！！音声ファイル再生のエラーが出たぞ！人間！対応しろ！",
-                CHARACTER_MAP[DEFAULT_CHARACTER],
-            )
+
+
+# リマインダー通知
+@tasks.loop(seconds=1)
+async def check_reminders():
+    now = int(time.time())
+    for reminder in reminders[:]:
+        rem_unix_time, channel_id, interval, users = reminder
+        if now >= rem_unix_time:
+            member_mentions = " ".join([f"<@{uid}>" for uid in user_ids])
+            await rem_channel.send(f"リマインダーです！ {member_mentions}")
+            reminders.remove(reminder)
+            next_reminder = now + (interval * 60)
+            reminders.append((next_reminder, channel_id, interval, users))
 
 
 bot.run(TOKEN)
