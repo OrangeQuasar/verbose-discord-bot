@@ -20,6 +20,9 @@ CHARACTER_MAP = config["character_map"]
 SAVE_DIR = config["rec_directory"]
 OUTPUT_CHANNELID = config["recording_output_cnannelID"]
 VOICEVOX_URL = config["voicevox_url"]
+DICT_DIR = config["dictionary_directory"]
+os.makedirs(SAVE_DIR, exist_ok=True)
+os.makedirs(DICT_DIR, exist_ok=True)
 
 # ユーザーごとのキャラクター設定(なにこれ?)
 user_character_map = {}
@@ -44,13 +47,6 @@ user_audio = {}  # 録音データを保存する辞書
 reminders = []  # リマインダーのリスト
 
 
-class AudioRecorder(discord.VoiceClient):
-    async def recv_opus_packet(self, user):
-        display_name = user.display_name
-        if display_name not in self.buffer:
-            self.buffer[display_name] = []
-
-
 # ファイル拡張子判別
 def classify_attachment(filename):
     extension = filename.split(".")[-1].lower()
@@ -66,145 +62,64 @@ def classify_attachment(filename):
         return "ファイル"
 
 
-# なにこれ?
-def apply_custom_dictionary(guild_id, text):
-    if guild_id not in server_dictionaries:
-        return text
-
-    for entry in server_dictionaries[guild_id]:
-        surface = entry["surface"]
-        pronunciation = entry["pronunciation"]
-        text = text.replace(surface, pronunciation)
-    return text
+# サーバーごとの辞書ファイルパスを取得
+def get_dict_path(guild_id):
+    return os.path.join(DICT_DIR, f"user_dict_{guild_id}.json")
 
 
-# botログイン&ステータス
-@bot.event
-async def on_ready():
-    print(f"Botとしてログインしました: {bot.user}")
-    activity = discord.Activity(type=discord.ActivityType.streaming, name="絶賛(?)稼働中! | !help ")
-    # activity = discord.Activity(status=discord.Status.dnd, type=discord.ActivityType.streaming, name="メンテナンス中")
-    await bot.change_presence(activity=activity)
-    check_reminders.start()
+# サーバーごとの辞書をVOICEVOXにインポート
+def import_user_dict(guild_id):
+    dict_path = get_dict_path(guild_id)
 
-
-# ボイスチャンネル接続
-@bot.command()
-async def join(ctx):
-    global active_text_channel
-    try:
-        if ctx.author.voice:
-            channel = ctx.author.voice.channel
-            await channel.connect()
-            active_text_channel = ctx.channel
-            await ctx.send(
-                f"ボイスチャンネル「 {channel.name} 」に接続しました！ｷﾀ━━━━(ﾟ∀ﾟ)━━━━!!"
-            )
-        else:
-            await ctx.send("ボイスチャンネルに接続してからコマンドを実行してください！")
-    except discord.ClientException as e:
-        await ctx.send(f"既にボイスチャンネルに接続しています。({e})")
-    except Exception as e:
-        await ctx.send(
-            f"ズモモエラー！！チャンネル接続のエラーが出たぞ！人間！対応しろ！: {e}"
-        )
-
-
-# ボイスチャンネル退出
-@bot.command()
-async def leave(ctx):
-    global active_text_channel
-    if ctx.voice_client:
-        await ctx.voice_client.disconnect()
-        active_text_channel = None
-        await ctx.send("切断しました！─=≡Σ((( つ•̀ω•́)つ")
-    else:
-        await ctx.send("Botはボイスチャンネルに接続していません。")
-
-
-# 再生中の音声を停止
-@bot.command()
-async def vstop(ctx):
-    if ctx.voice_client and ctx.voice_client.is_playing():
-        ctx.voice_client.stop()
-        global is_audio_playing
-        is_audio_playing = False
-        await ctx.send("再生を停止しました。")
-    else:
-        await ctx.send("再生中の音声がありません。")
-
-
-# コマンド実行者のキャラクターを設定
-@bot.command()
-async def set(ctx, character_name: str):
-    global user_character_map
-
-    if character_name not in CHARACTER_MAP:
-        await ctx.send(
-            f"キャラクター名 '{character_name}' は存在しません。有効なキャラクターを指定/config.jsonを確認してください。"
-        )
+    if not os.path.exists(dict_path):
+        print(f"サーバー {guild_id} の辞書ファイルが見つかりません。")
         return
 
-    user_character_map[ctx.author.id] = CHARACTER_MAP[character_name]
-    await ctx.send(f"キャラクターを '{character_name}' に設定しました。")
+    with open(dict_path, "r", encoding="utf-8") as f:
+        user_dict = json.load(f)
+
+    url = f"{VOICEVOX_URL}/import_user_dict"
+    params = {"override": "true"}
+    response = requests.post(url, json=user_dict, params=params)
+
+    if response.status_code != 204:
+        print(f"辞書のインポートに失敗しました: {response.status_code}")
 
 
-# 辞書登録機能
-@bot.command()
-async def add(ctx, surface: str, pronunciation: str):
-    guild_id = ctx.guild.id
-    if guild_id not in server_dictionaries:
-        server_dictionaries[guild_id] = []
+# VOICEVOXの辞書をエクスポート
+def export_user_dict(guild_id):
+    url = f"{VOICEVOX_URL}/user_dict"
+    response = requests.get(url)
 
-    entry = {"serverID": guild_id, "surface": surface, "pronunciation": pronunciation}
-    with open("serverdata.json", "w", encoding="utf-8") as f2:
-        json.dump(entry, f2, indent=4, ensure_ascii=False)
-    server_dictionaries[guild_id].append(entry)
-    await ctx.send(f"辞書に単語を登録しました: {surface} ({pronunciation})")
+    if response.status_code == 200:
+        user_dict = response.json()
+        dict_path = get_dict_path(guild_id)
 
-
-# 音声ファイルの再生設定を変更
-@bot.command()
-async def audioplay(ctx, state: str):
-    guild_id = ctx.guild.id
-    if state.lower() not in ["true", "false"]:
-        await ctx.send("無効な設定です。有効な値: true または false")
-        return
-
-    server_audio_playback_settings[guild_id] = state.lower() == "true"
-    status = "有効" if server_audio_playback_settings[guild_id] else "無効"
-    await ctx.send(f"音声ファイルの再生設定を{status}にしました。")
-
-
-# 録音を開始
-@bot.command()
-async def rec(ctx):
-    for file in os.listdir(SAVE_DIR):
-        file_path = os.path.join(SAVE_DIR, file)
-        os.remove(file_path)
-        user_audio.clear()
-    if ctx.voice_client:
-        # 録音開始時間を保存
-        with open(os.path.join(SAVE_DIR, "start_time.txt"), "w") as f:
-            f.write(str(int(time.time())))
-
-        ctx.voice_client.start_recording(
-            discord.sinks.MP3Sink(), finished_callback, ctx
-        )
-        await ctx.send("録音を開始しました。")
+        with open(dict_path, "w", encoding="utf-8") as f:
+            json.dump(user_dict, f, ensure_ascii=False, indent=2)
     else:
-        await ctx.send("ボイスチャンネルに接続してからコマンドを実行してください！")
+        print(f"辞書のエクスポートに失敗しました: {response.status_code}")
 
 
-# 録音を終了
-@bot.command()
-async def recstop(ctx):
-    # 録音終了時間を保存
-    with open(os.path.join(SAVE_DIR, "end_time.txt"), "w") as f:
-        f.write(str(int(time.time())))
+# サーバーごとの辞書ファイルパスを取得
+def get_dict_path(guild_id):
+    return os.path.join(DICT_DIR, f"user_dict_{guild_id}.json")
 
-    ctx.voice_client.stop_recording()
-    await ctx.send("録音を終了しました。音声を合成中...")
+
+# 辞書をローカルに保存
+def save_dict(guild_id, user_dict):
+    dict_path = get_dict_path(guild_id)
+    with open(dict_path, "w", encoding="utf-8") as f:
+        json.dump(user_dict, f, ensure_ascii=False, indent=2)
+
+
+# 辞書を読み込む
+def load_dict(guild_id):
+    dict_path = get_dict_path(guild_id)
+    if os.path.exists(dict_path):
+        with open(dict_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {}  # デフォルトで空辞書
 
 
 # 録音音声の合成
@@ -256,15 +171,238 @@ async def finished_callback(
     await ctx.send("録音データの合成完了！`!output`を実行してください。")
 
 
+# botログイン&ステータス
+@bot.event
+async def on_ready():
+    print(f"Botとしてログインしました: {bot.user}")
+    activity = discord.Activity(
+        type=discord.ActivityType.streaming, name="絶賛(?)稼働中!  |  !help "
+    )
+    await bot.change_presence(activity=activity)
+    # await bot.change_presence(activity=discord.Game(name="メンテナンス中"))
+    check_reminders.start()
+
+
+# ボイスチャンネル接続
+@bot.command()
+async def join(ctx):
+    global active_text_channel
+    # すでにこのサーバーで接続している場合
+    if ctx.guild.voice_client:
+        await ctx.send(
+            "ボットはすでにこのサーバーの別のボイスチャンネルに接続しています。"
+        )
+        return
+
+        # すでに別のサーバーで接続しているかを確認
+    for vc in bot.voice_clients:
+        if vc.guild != ctx.guild:  # 別のサーバーに接続している場合
+            await ctx.send(
+                "ボットは現在別のサーバーのボイスチャンネルに接続しており、利用できません。"
+            )
+            return
+
+    if ctx.author.voice:
+        channel = ctx.author.voice.channel
+        await channel.connect()
+        active_text_channel = ctx.channel
+        await ctx.send(
+            f"ボイスチャンネル「 {channel.name} 」に接続しました！ｷﾀ━━━━(ﾟ∀ﾟ)━━━━!!"
+        )
+        await generate_and_play_tts(
+            ctx.voice_client, "接続しました", CHARACTER_MAP[DEFAULT_CHARACTER]
+        )
+    else:
+        await ctx.send("ボイスチャンネルに接続してからコマンドを実行してください！")
+
+
+# ボイスチャンネル退出
+@bot.command()
+async def leave(ctx):
+    global active_text_channel
+    if ctx.voice_client:
+        active_text_channel = None
+        guild_id = ctx.guild.id
+        export_user_dict(guild_id)
+        await ctx.voice_client.disconnect()
+        await ctx.send("切断しました！─=≡Σ((( つ•̀ω•́)つ")
+    else:
+        await ctx.send("Botはボイスチャンネルに接続していません。")
+
+
+# 再生中の音声を停止
+@bot.command()
+async def vstop(ctx):
+    if ctx.voice_client and ctx.voice_client.is_playing():
+        ctx.voice_client.stop()
+        global is_audio_playing
+        is_audio_playing = False
+        await ctx.send("再生を停止しました。")
+    else:
+        await ctx.send("再生中の音声がありません。")
+
+
+# コマンド実行者のキャラクターを設定
+@bot.command()
+async def set(ctx, character_name: str):
+    global user_character_map
+
+    if character_name not in CHARACTER_MAP:
+        await ctx.send(
+            f"キャラクター名 '{character_name}' は存在しません。有効なキャラクターを指定/config.jsonを確認してください。"
+        )
+        return
+
+    user_character_map[ctx.author.id] = CHARACTER_MAP[character_name]
+    await ctx.send(f"キャラクターを '{character_name}' に設定しました。")
+
+
+# 辞書登録
+@bot.command()
+async def add(ctx, word: str, pronunciation: str):
+    # VOICEVOXに単語を追加（GETパラメータとして送信）
+    url = f"{VOICEVOX_URL}/user_dict_word"
+    data = {
+        "surface": word,  # 単語
+        "pronunciation": pronunciation,  # カタカナ発音
+        "accent_type": 0,  # アクセント位置
+    }
+
+    response = requests.post(url, params=data)
+
+    if response.status_code == 200:
+        await ctx.send(f"`{word}` を `{pronunciation}`として登録しました！")
+    else:
+        error_msg = response.json().get("detail", "不明なエラー")
+        await ctx.send(
+            f"単語の登録に失敗しました。\nエラー: {error_msg} ({response.status_code})"
+        )
+
+
+"""
+# 辞書登録機能(発音込)
+@bot.command()
+async def acc(ctx, word: str, pronunciation: str, accent_type: int):
+    # VOICEVOXに単語を追加（GETパラメータとして送信）
+    url = f"{VOICEVOX_URL}/user_dict_word"
+    data = {
+        "surface": word,  # 単語
+        "pronunciation": pronunciation,  # カタカナ発音
+        "accent_type": accent_type,  # アクセント位置
+    }
+
+    response = requests.post(url, params=data) 
+
+    if response.status_code == 200:
+        await ctx.send(
+            f"`{word}` を `{pronunciation}`（アクセント: {accent_type}）として登録しました！"
+        )
+    else:
+        error_msg = response.json().get("detail", "不明なエラー")
+        await ctx.send(
+            f"単語の登録に失敗しました。\nエラー: {error_msg} ({response.status_code})"
+        )
+"""
+
+
+# 辞書削除
+@bot.command()
+async def deldic(ctx, word: str):
+    # まず、辞書の一覧を取得
+    url = f"{VOICEVOX_URL}/user_dict"
+    response = requests.get(url)
+
+    if response.status_code != 200:
+        await ctx.send(f"辞書の取得に失敗しました。エラー: {response.status_code}")
+        return
+
+    words = response.json()
+
+    # 指定した単語の `word_uuid` を検索
+    target_uuid = None
+    for uuid, entry in words.items():
+        if entry["surface"] == word:
+            target_uuid = uuid
+            break
+
+    if not target_uuid:
+        await ctx.send(f"`{word}` は辞書に登録されていません。")
+        return
+
+    # 単語を削除
+    delete_url = f"{VOICEVOX_URL}/user_dict_word"
+    delete_params = {"word_uuid": target_uuid}
+
+    delete_response = requests.delete(delete_url, params=delete_params)
+
+    if delete_response.status_code == 200:
+        await ctx.send(f"`{word}` を辞書から削除しました。")
+    else:
+        error_msg = delete_response.json().get("detail", "不明なエラー")
+        await ctx.send(
+            f"`{word}` の削除に失敗しました。\nエラー: {error_msg} ({delete_response.status_code})"
+        )
+
+
+# 音声ファイルの再生設定を変更
+@bot.command()
+async def audioplay(ctx, state: str):
+    guild_id = ctx.guild.id
+    if state.lower() not in ["true", "false"]:
+        await ctx.send("無効な設定です。有効な値: true または false")
+        return
+
+    server_audio_playback_settings[guild_id] = state.lower() == "true"
+    status = "有効" if server_audio_playback_settings[guild_id] else "無効"
+    await ctx.send(f"音声ファイルの再生設定を{status}にしました。")
+
+
+# 録音を開始
+@bot.command()
+async def rec(ctx):
+    for file in os.listdir(SAVE_DIR):
+        file_path = os.path.join(SAVE_DIR, file)
+        os.remove(file_path)
+        user_audio.clear()
+    if ctx.voice_client:
+        # 録音開始時間を保存
+        with open(os.path.join(SAVE_DIR, "start_time.txt"), "w") as f:
+            f.write(str(int(time.time())))
+
+        ctx.voice_client.start_recording(
+            discord.sinks.MP3Sink(), finished_callback, ctx
+        )
+        await ctx.send("録音を開始しました。")
+    else:
+        await ctx.send("ボイスチャンネルに接続してからコマンドを実行してください！")
+
+
+# 録音を終了
+@bot.command()
+async def recstop(ctx):
+    # 録音終了時間を保存
+    with open(os.path.join(SAVE_DIR, "end_time.txt"), "w") as f:
+        f.write(str(int(time.time())))
+
+    ctx.voice_client.stop_recording()
+    await ctx.send("録音を終了しました。音声を合成中...")
+
+
 # 録音データ出力
 @bot.command()
-async def output(ctx, display_name: str, channel_id: int = None):
+async def output(ctx, display_name: str = None, channel_id: int = None):
+
     channel = bot.get_channel(channel_id or OUTPUT_CHANNELID)
     if not channel:
         await ctx.send(
             "出力先のチャンネルが見つかりません。config.jsonを確認してください。"
         )
         return
+
+    if display_name is None:
+        await ctx.send(
+            "パラメーターを指定してください。詳細は `!help` で確認してください。"
+        )
 
     if display_name.lower() == "merge":
         # ディレクトリ内のMP3ファイルを取得（merged.mp3 は除外）
@@ -303,7 +441,9 @@ async def output(ctx, display_name: str, channel_id: int = None):
         if os.path.exists(file_path):
             await channel.send(file=discord.File(file_path))
         else:
-            await ctx.send(f"{display_name}.mp3 が見つかりません。")
+            await ctx.send(
+                f"{display_name}.mp3 が見つかりません。指定したユーザー名が間違っているか、存在しない可能性があります。"
+            )
 
 
 # リマインダー設定
@@ -312,8 +452,8 @@ async def reminder(
     ctx, datetime_str: str, interval: int, *users: commands.Greedy[discord.Member]
 ):
     try:
-        global user_ids,rem_channel
-        rem_channel = ctx
+        global user_ids, rem_channel
+        # rem_channel = ctx
         remind_time = datetime.strptime(datetime_str, "%Y-%m-%d-%H-%M")
         rem_unix_time = int(time.mktime(remind_time.timetuple()))
         user_ids = [user.id for user in users]  # ユーザーIDを取得
@@ -323,7 +463,7 @@ async def reminder(
             f'リマインダーを設定しました。 <t:{int(rem_unix_time)}:F> に {" ".join(member_mentions)} に通知します。'
         )
     except ValueError:
-        await rem_channel.send(
+        await ctx.send(
             "日付フォーマットが間違っています。 yyyy-mm-dd-hh-mm で入力してください。"
         )
 
@@ -349,7 +489,9 @@ async def help(ctx):
 
     `!set <キャラクター名>`: あなたのキャラクターを設定
 
-    `!add <単語> <読み>`: サーバー固有の辞書に単語を登録
+    `!add <単語> <カタカナ読み>`: 辞書に単語の読み方を登録
+
+    `!deldic <単語>`: 辞書に登録された単語を削除
 
     `!audioplay <true|false>`: 添付された音声ファイルの再生設定を変更
         true: 再生する
@@ -361,6 +503,7 @@ async def help(ctx):
 
     `!output <<ユーザー表示名>|all|merge>`: 録音した音声を出力
         ユーザー表示名: 特定のユーザーの録音音声を出力
+        　※ただしユーザー表示名に空白が含まれる場合はアンダーバー"_"を使用すること。
         all: 全ユーザーの録音音声を出力
         merge: 全ユーザーの録音音声を1つにまとめて出力
 
@@ -385,11 +528,6 @@ async def on_message(message):
         or active_text_channel != message.channel
     ):
         return
-
-    # コマンドメッセージは読み上げない
-    if message.content.startswith(bot.command_prefix):
-        return
-
     """
     # ユーザーメンションを名前に置換
     for user in message.mentions:
@@ -407,12 +545,22 @@ async def on_message(message):
         )
         guild_id = message.guild.id
 
+        # コマンドメッセージは読み上げない
+        if message.content.startswith(bot.command_prefix):
+            return
+
+        if message.content.startswith("||"):
+            tts_text = "センシティブな内容だぞ、みんな気を付けるんだ！"
+            await generate_and_play_tts(
+                message.guild.voice_client, tts_text, character_id
+            )
+
         if message.attachments:
             for attachment in message.attachments:
                 file_type = classify_attachment(attachment.filename)
                 if file_type == "音声":
                     if server_audio_playback_settings.get(guild_id, True):
-                        tts_text = "添付された音声ファイルを再生します。"
+                        tts_text = "添付された音声ファイルを再生します"
                         await generate_and_play_tts(
                             message.guild.voice_client, tts_text, character_id
                         )
@@ -433,10 +581,9 @@ async def on_message(message):
                 message.guild.voice_client, "リンク省略", character_id
             )
         else:
-            processed_text = apply_custom_dictionary(guild_id, message.content)
             await generate_and_play_tts(
-                message.guild.voice_client, processed_text, character_id
-            )
+                message.guild.voice_client, message.content, character_id
+            )  # 結局一番大事
 
 
 # VOICEVOXを使ってTTSを生成し再生
@@ -445,7 +592,9 @@ async def generate_and_play_tts(voice_client, text, character_id):
     try:
         is_audio_playing = False
         encoded_text = urllib.parse.quote(text)
-        query_url = f"{VOICEVOX_URL}/audio_query?text={encoded_text}&speaker={character_id}"
+        query_url = (
+            f"{VOICEVOX_URL}/audio_query?text={encoded_text}&speaker={character_id}"
+        )
         query_response = requests.post(query_url)
         query_response.raise_for_status()
         audio_query = query_response.json()
@@ -462,7 +611,9 @@ async def generate_and_play_tts(voice_client, text, character_id):
         if not is_audio_playing or not voice_client.is_playing():
             is_audio_playing = True
             voice_client.play(
-                discord.FFmpegPCMAudio(audio_data, pipe=True),
+                discord.FFmpegPCMAudio(
+                    audio_data, pipe=True
+                ),  # after=lambda e: print(f"再生終了: {e}")
             )
             while voice_client.is_playing():
                 await asyncio.sleep(1)
@@ -473,7 +624,7 @@ async def generate_and_play_tts(voice_client, text, character_id):
         )
         print(error_message)
         if active_text_channel:
-            await active_text_channel.send(error_message)   
+            await active_text_channel.send(error_message)
 
 
 # 添付された音声をURLから再生

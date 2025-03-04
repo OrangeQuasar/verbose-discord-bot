@@ -1,6 +1,7 @@
 {
   "token": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
   "rec_directory": "recordings",
+  "dictionary_directory": "dictionaries",
   "recording_output_cnannelID": 1234567890123456789,
   "default_character_name": "ずんだもん",
   "voicevox_url": "http://127.0.0.1:50021",
