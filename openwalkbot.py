@@ -453,7 +453,7 @@ async def reminder(
 ):
     try:
         global user_ids, rem_channel
-        # rem_channel = ctx
+        rem_channel = ctx
         remind_time = datetime.strptime(datetime_str, "%Y-%m-%d-%H-%M")
         rem_unix_time = int(time.mktime(remind_time.timetuple()))
         user_ids = [user.id for user in users]  # ユーザーIDを取得
